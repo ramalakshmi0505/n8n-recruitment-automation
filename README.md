@@ -1,6 +1,6 @@
 # n8n AI-Powered Recruitment Automation Pipeline
 
-An end-to-end recruitment automation workflow built with [n8n](https://n8n.io). From job application to interview slot — fully automated, zero manual steps.
+An end-to-end recruitment automation workflow built with [n8n](https://n8n.io). From job application to interview slot fully automated, zero manual steps.
 
 ---
 
