@@ -1,0 +1,278 @@
+{
+  "name": "AI-Powered Recruitment Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-application",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Application Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Triggered when a candidate submits a job application form. Receives: name, email, role, cv_text, linkedin_url"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.role }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "validate-input",
+      "name": "Validate Application",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "notes": "Check that required fields (role, email, cv_text) are present"
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert technical recruiter. Evaluate the candidate CV against the job role and return a JSON object with: score (0-100), strengths (array of 3 key strengths), gaps (array of concerns), recommendation (SHORTLIST / REJECT / HOLD), summary (2 sentence summary). Return only valid JSON, no markdown."
+            },
+            {
+              "role": "user",
+              "content": "=Role: {{ $json.role }}\n\nCandidate CV:\n{{ $json.cv_text }}\n\nLinkedIn: {{ $json.linkedin_url }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "ai-cv-screener",
+      "name": "AI CV Screener",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [680, 200],
+      "notes": "Uses GPT-4o to evaluate the CV against the role and return a structured score and recommendation"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.message.content;\nconst parsed = JSON.parse(raw);\nreturn [{ json: { ...parsed, candidate: $('New Application Webhook').first().json } }];"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200],
+      "notes": "Parses the AI JSON response and merges it with the original candidate data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.recommendation }}",
+              "value2": "SHORTLIST",
+              "operation": "equals"
+            }
+          ]
+        }
+      },
+      "id": "route-decision",
+      "name": "Shortlist or Reject?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1120, 200],
+      "notes": "Routes candidate to shortlist flow or rejection flow based on AI recommendation"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "event",
+        "operation": "create",
+        "calendar": "primary",
+        "start": "={{ $now.plus(2, 'days').startOf('day').plus(10, 'hours').toISO() }}",
+        "end": "={{ $now.plus(2, 'days').startOf('day').plus(11, 'hours').toISO() }}",
+        "additionalFields": {
+          "summary": "=Interview: {{ $json.candidate.name }} for {{ $json.candidate.role }}",
+          "description": "=AI Score: {{ $json.score }}/100\n\nStrengths:\n{{ $json.strengths.join('\\n') }}\n\nGaps:\n{{ $json.gaps.join('\\n') }}\n\nSummary: {{ $json.summary }}",
+          "attendees": [
+            {
+              "email": "={{ $json.candidate.email }}"
+            }
+          ]
+        }
+      },
+      "id": "schedule-interview",
+      "name": "Schedule Interview (Google Calendar)",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [1340, 100],
+      "notes": "Automatically schedules a 1-hour interview slot 2 business days out and invites the candidate"
+    },
+    {
+      "parameters": {
+        "fromEmail": "hr@yourcompany.com",
+        "toEmail": "={{ $json.candidate.email }}",
+        "subject": "=Interview Invitation - {{ $json.candidate.role }} at YourCompany",
+        "emailType": "html",
+        "message": "=<p>Dear {{ $json.candidate.name }},</p><p>Thank you for applying for the <strong>{{ $json.candidate.role }}</strong> position. We were impressed by your profile and would love to invite you for an interview.</p><p><strong>Details:</strong><br/>Date: In 2 business days<br/>Duration: 1 hour<br/>Format: Video call (link will follow)</p><p>Please confirm your availability by replying to this email.</p><p>Best regards,<br/>HR Team</p>"
+      },
+      "id": "send-shortlist-email",
+      "name": "Send Interview Invitation",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1340, 220],
+      "notes": "Sends a personalised HTML interview invitation to the shortlisted candidate"
+    },
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "resource": "tableRecord",
+        "operation": "create",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Candidates",
+        "fields": {
+          "fieldMappingsUi": {
+            "fieldMappings": [
+              { "fieldId": "Name", "fieldValue": "={{ $json.candidate.name }}" },
+              { "fieldId": "Email", "fieldValue": "={{ $json.candidate.email }}" },
+              { "fieldId": "Role", "fieldValue": "={{ $json.candidate.role }}" },
+              { "fieldId": "AI Score", "fieldValue": "={{ $json.score }}" },
+              { "fieldId": "Status", "fieldValue": "Shortlisted" },
+              { "fieldId": "Strengths", "fieldValue": "={{ $json.strengths.join(', ') }}" },
+              { "fieldId": "Gaps", "fieldValue": "={{ $json.gaps.join(', ') }}" },
+              { "fieldId": "Summary", "fieldValue": "={{ $json.summary }}" }
+            ]
+          }
+        }
+      },
+      "id": "save-to-airtable-shortlist",
+      "name": "Save to AirTable (Shortlisted)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [1560, 100],
+      "notes": "Saves shortlisted candidate with AI score and evaluation details to Airtable CRM"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "value": "hiring-team"
+        },
+        "text": "=:white_check_mark: *New Shortlisted Candidate*\n\n*Name:* {{ $json.candidate.name }}\n*Role:* {{ $json.candidate.role }}\n*AI Score:* {{ $json.score }}/100\n\n*Strengths:*\n{{ $json.strengths.map(s => '• ' + s).join('\\n') }}\n\n*Gaps:*\n{{ $json.gaps.map(g => '• ' + g).join('\\n') }}\n\n*Summary:* {{ $json.summary }}\n\n*Interview:* Scheduled in 2 days",
+        "otherOptions": {}
+      },
+      "id": "notify-hiring-team",
+      "name": "Notify Hiring Team (Slack)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1560, 220],
+      "notes": "Posts a rich Slack notification to the hiring team channel with the full AI evaluation"
+    },
+    {
+      "parameters": {
+        "fromEmail": "hr@yourcompany.com",
+        "toEmail": "={{ $json.candidate.email }}",
+        "subject": "=Your application for {{ $json.candidate.role }}",
+        "emailType": "html",
+        "message": "=<p>Dear {{ $json.candidate.name }},</p><p>Thank you for your interest in the <strong>{{ $json.candidate.role }}</strong> position at YourCompany.</p><p>After carefully reviewing your application, we regret to inform you that we will not be moving forward with your candidacy at this time. This was a competitive process and we encourage you to apply for future openings.</p><p>We wish you all the best in your job search.</p><p>Kind regards,<br/>HR Team</p>"
+      },
+      "id": "send-rejection-email",
+      "name": "Send Rejection Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2,
+      "position": [1340, 380],
+      "notes": "Sends a polite, personalised rejection email to candidates not shortlisted"
+    },
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "resource": "tableRecord",
+        "operation": "create",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Candidates",
+        "fields": {
+          "fieldMappingsUi": {
+            "fieldMappings": [
+              { "fieldId": "Name", "fieldValue": "={{ $json.candidate.name }}" },
+              { "fieldId": "Email", "fieldValue": "={{ $json.candidate.email }}" },
+              { "fieldId": "Role", "fieldValue": "={{ $json.candidate.role }}" },
+              { "fieldId": "AI Score", "fieldValue": "={{ $json.score }}" },
+              { "fieldId": "Status", "fieldValue": "={{ $json.recommendation }}" },
+              { "fieldId": "Gaps", "fieldValue": "={{ $json.gaps.join(', ') }}" }
+            ]
+          }
+        }
+      },
+      "id": "save-to-airtable-reject",
+      "name": "Save to AirTable (Rejected)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2,
+      "position": [1560, 380],
+      "notes": "Saves rejected/hold candidates to Airtable for future reference and talent pool"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"received\", \"message\": \"Your application has been received. You will hear from us shortly.\" }"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [460, 460],
+      "notes": "Returns immediate acknowledgement to the candidate application form"
+    }
+  ],
+  "connections": {
+    "New Application Webhook": {
+      "main": [[{ "node": "Validate Application", "type": "main", "index": 0 }, { "node": "Webhook Response", "type": "main", "index": 0 }]]
+    },
+    "Validate Application": {
+      "main": [
+        [{ "node": "AI CV Screener", "type": "main", "index": 0 }],
+        [{ "node": "Webhook Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "AI CV Screener": {
+      "main": [[{ "node": "Parse AI Response", "type": "main", "index": 0 }]]
+    },
+    "Parse AI Response": {
+      "main": [[{ "node": "Shortlist or Reject?", "type": "main", "index": 0 }]]
+    },
+    "Shortlist or Reject?": {
+      "main": [
+        [
+          { "node": "Schedule Interview (Google Calendar)", "type": "main", "index": 0 },
+          { "node": "Send Interview Invitation", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Send Rejection Email", "type": "main", "index": 0 },
+          { "node": "Save to AirTable (Rejected)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Schedule Interview (Google Calendar)": {
+      "main": [[{ "node": "Save to AirTable (Shortlisted)", "type": "main", "index": 0 }]]
+    },
+    "Send Interview Invitation": {
+      "main": [[{ "node": "Notify Hiring Team (Slack)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "End-to-end AI-powered recruitment pipeline. Receives applications via webhook, screens CVs using GPT-4o, scores candidates, auto-schedules interviews for shortlisted candidates, sends personalised emails, notifies hiring team on Slack, and logs everything to Airtable.",
+    "author": "Ramalakshmi Mani",
+    "version": "1.0",
+    "tags": ["hr", "recruitment", "ai", "automation", "n8n"]
+  }
+}
